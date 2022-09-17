@@ -1,5 +1,5 @@
-#include "kernel/types.h"
 #include "kernel/stat.h"
+#include "kernel/types.h"
 #include "user/user.h"
 
 int main(void) {
@@ -29,8 +29,7 @@ int main(void) {
     }
     close(p_to_parent[1]);
     exit(0);
-  }
-  else {
+  } else {
     close(p_to_child[0]);
     close(p_to_parent[1]);
     if (write(p_to_child[1], "a", 1) != 1) {

@@ -1,15 +1,15 @@
-#include "kernel/types.h"
-#include "kernel/stat.h"
-#include "user/user.h"
 #include "kernel/fs.h"
+#include "kernel/stat.h"
+#include "kernel/types.h"
+#include "user/user.h"
 
-void findfile(int path_num, char *path[10], char* file) {
+void findfile(int path_num, char *path[10], char *file) {
   char buf[512], *p;
   int fd;
   struct dirent de;
   struct stat st;
 
-  for (int i=0; i<path_num; i++) {
+  for (int i = 0; i < path_num; i++) {
     if ((fd = open(path[i], 0)) < 0) {
       fprintf(1, "ls folder %s failed\n", path[i]);
       return;
@@ -23,7 +23,7 @@ void findfile(int path_num, char *path[10], char* file) {
       if (de.inum == 0) {
         continue;
       }
-      if (strcmp(de.name, ".")==0 || strcmp(de.name, "..")==0) {
+      if (strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0) {
         continue;
       }
       memmove(p, de.name, DIRSIZ);
@@ -35,8 +35,7 @@ void findfile(int path_num, char *path[10], char* file) {
         tmp_ptr[tmp_path_num] = malloc(strlen(buf) + 1);
         strcpy(tmp_ptr[tmp_path_num], buf);
         tmp_path_num += 1;
-      }
-      else if (strcmp(de.name, file) == 0) {
+      } else if (strcmp(de.name, file) == 0) {
         printf("%s\n", buf);
       }
     }
