@@ -15,12 +15,13 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+extern int page_reference_count[];
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
 {
   pagetable_t kpgtbl;
-
   kpgtbl = (pagetable_t) kalloc();
   memset(kpgtbl, 0, PGSIZE);
 
@@ -44,8 +45,10 @@ kvmmake(void)
   kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
   // allocate and map a kernel stack for each process.
+
   proc_mapstacks(kpgtbl);
-  
+
+
   return kpgtbl;
 }
 
@@ -153,8 +156,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("mappages: remap");
+//    if((*pte & PTE_V) && !(perm & PTE_COW))
+//      panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -308,7 +311,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -317,13 +319,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if (flags & PTE_W) {
+    flags = flags & (~PTE_W);
+    flags = flags | PTE_COW;
+    *pte = PA2PTE(pa) | flags;
+    }
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
+    page_reference_count[pa/PGSIZE] += 1;
   }
   return 0;
 
@@ -352,12 +356,43 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  pte_t *pte;
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    pte = walk(pagetable, va0, 0);
+    pa0 = PTE2PA(*pte);
+    int idx = PGROUNDDOWN(pa0)/PGSIZE;
+    if ((*pte & PTE_V) == 0 || (*pte & PTE_U) == 0) {
+      printf("ptev/ u == 0, pte: %p\n", (uint64)*pte);
+      pa0 = 0;
+    }
+    else if((*pte & PTE_COW) != 0 ){
+      uint flags = PTE_FLAGS(*pte);
+      if (page_reference_count[idx] > 1) {
+        char *mem;
+      if ((mem = kalloc()) == 0) {
+        pa0 = 0;
+        printf("alloc failed\n");
+      }
+      else {
+        printf("alloc noew page mem: %p, pa: %p\n", (uint64)mem, pa0);
+        memmove(mem, (char *)pa0, PGSIZE);}
+      if (mappages(pagetable, va0, PGSIZE, (uint64)mem, (flags&(~PTE_COW))|PTE_W) != 0) {
+        kfree(mem);
+        pa0 = 0;
+      }
+      else {
+        pa0 = (uint64)mem;
+        page_reference_count[idx] -= 1;
+      }
+    }
+    else {
+      *pte = ((uint64)*pte & (~PTE_COW)) | PTE_W;
+    }
+  }
+
+  printf("pa0 %p\n", pa0);
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

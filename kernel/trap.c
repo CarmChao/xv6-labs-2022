@@ -10,9 +10,11 @@ struct spinlock tickslock;
 uint ticks;
 
 extern char trampoline[], uservec[], userret[];
+extern int page_reference_count[];
 
-// in kernelvec.S, calls kerneltrap().
-void kernelvec();
+    // in kernelvec.S, calls kerneltrap().
+    void
+    kernelvec();
 
 extern int devintr();
 
@@ -67,6 +69,51 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15 || r_scause() == 13) {
+    uint64 fault_addr = r_stval();
+    //printf("page write fault, addr %p \n", fault_addr);
+    //printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    pte_t *pte = walk(p->pagetable, fault_addr, 0);
+    if (pte == 0 || (PTE_FLAGS(*pte) & PTE_COW) == 0) {
+      printf("here: unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      setkilled(p);
+    }
+    else {
+      uint64 pa = PTE2PA(*pte);
+      int idx = pa / PGSIZE;
+      uint64 va = PGROUNDDOWN(fault_addr);
+      uint flags = PTE_FLAGS(*pte);
+      flags = flags | PTE_W;
+      flags = flags & (~PTE_COW);
+      //printf("alloc new mem for page, p->name %s, page ref: %d\n", p->name, page_reference_count[idx]);
+      //printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      if (page_reference_count[idx] == 1) {
+        if (mappages(p->pagetable, va, PGSIZE, pa, flags) != 0) {
+          setkilled(p);
+        }
+      } else {
+        char* mem;
+        if ( (mem = kalloc()) == 0) {
+          //  printf("kalloc error: unexpected scause %p pid=%d\n", r_scause(),
+          //         p->pid);
+          //  printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+          setkilled(p);
+        }
+        else {
+          memmove(mem, (char*)pa, PGSIZE);
+          if ((mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) != 0)) {
+            printf("mappage error: unexpected scause %p pid=%d\n", r_scause(),
+                   p->pid);
+            printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+            kfree(mem);
+            setkilled(p);
+          }
+          else
+            page_reference_count[idx] -= 1;
+        }
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
